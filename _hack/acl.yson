@@ -2,6 +2,6 @@
     {
       "action" = "allow";
       "subjects" = ["gh-archive-yt"];
-      "permissions" = ["read"; "write"];
+      "permissions" = ["read"; "write"; "use"; "create"];
     }
 ]
