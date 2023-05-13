@@ -15,6 +15,8 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	ytzap "go.ytsaurus.tech/library/go/core/log/zap"
+	"go.ytsaurus.tech/yt/go/migrate"
+	"go.ytsaurus.tech/yt/go/schema"
 	"go.ytsaurus.tech/yt/go/ypath"
 	"go.ytsaurus.tech/yt/go/yson/yson2json"
 	"go.ytsaurus.tech/yt/go/yt"
@@ -27,6 +29,8 @@ import (
 type Service struct {
 	token   string
 	lg      *zap.Logger
+	table   ypath.Path
+	yc      yt.Client
 	batches chan []gh.Event
 
 	fetchedCount metric.Int64Counter
@@ -44,21 +48,37 @@ type Event struct {
 	Data yson2json.RawMessage `yson:"body"`
 }
 
-func (c *Service) Send(ctx context.Context) error {
-	tablePathEvents := ypath.Path("//go-faster").Child("github_events")
-	yc, err := ythttp.NewClient(&yt.Config{
-		Logger: &ytzap.Logger{L: zctx.From(ctx)},
-	})
-	if err != nil {
-		return errors.Wrap(err, "yt")
+func (c *Service) Migrate(ctx context.Context) error {
+	tables := map[ypath.Path]migrate.Table{
+		c.table: {
+			Schema: schema.Schema{
+				UniqueKeys: true,
+				Columns: []schema.Column{
+					{Name: "ts", ComplexType: schema.TypeTimestamp, SortOrder: schema.SortAscending},
+					{Name: "id", ComplexType: schema.TypeInt64, SortOrder: schema.SortAscending},
+					{Name: "body", ComplexType: schema.Optional{Item: schema.TypeAny}},
+				},
+			},
+			Attributes: map[string]any{
+				"optimize_for":      "scan",
+				"compression_codec": "zstd_5",
+			},
+		},
 	}
+	if err := migrate.EnsureTables(ctx, c.yc, tables, migrate.OnConflictDrop(ctx, c.yc)); err != nil {
+		return errors.Wrap(err, "ensure tables")
+	}
+	return nil
+}
+
+func (c *Service) Send(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case batch := <-c.batches:
 			for _, e := range batch {
-				bw := yc.NewRowBatchWriter()
+				bw := c.yc.NewRowBatchWriter()
 				if err := bw.Write(Event{
 					ID:   e.ID,
 					Time: uint64(e.CreatedAt.Unix()),
@@ -69,7 +89,7 @@ func (c *Service) Send(ctx context.Context) error {
 				if err := bw.Commit(); err != nil {
 					return errors.Wrap(err, "commit")
 				}
-				if err := yc.InsertRowBatch(ctx, tablePathEvents, bw.Batch(), &yt.InsertRowsOptions{}); err != nil {
+				if err := c.yc.InsertRowBatch(ctx, c.table, bw.Batch(), &yt.InsertRowsOptions{}); err != nil {
 					return errors.Wrap(err, "insert rows")
 				}
 			}
@@ -225,12 +245,24 @@ func main() {
 			return errors.Wrap(err, "failed to create gauge")
 		}
 
+		yc, err := ythttp.NewClient(&yt.Config{
+			Logger: &ytzap.Logger{L: zctx.From(ctx)},
+		})
+		if err != nil {
+			return errors.Wrap(err, "yt")
+		}
 		s := &Service{
 			batches:      make(chan []gh.Event, 5),
 			lg:           lg,
 			token:        os.Getenv("GITHUB_TOKEN"),
 			missCount:    missCount,
 			fetchedCount: fetchedCount,
+
+			table: ypath.Path("//go-faster").Child("github_events"),
+			yc:    yc,
+		}
+		if err := s.Migrate(ctx); err != nil {
+			return errors.Wrap(err, "migrate")
 		}
 
 		if _, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
