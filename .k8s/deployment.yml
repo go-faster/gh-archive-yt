@@ -46,8 +46,13 @@ spec:
               value: 0.0.0.0:8080
             - name: METRICS_ADDR
               value: 0.0.0.0:8090
-            - name: YT_ADDR
+            - name: YT_PROXY
               value: http-proxies.yt.svc.cluster.local
+            - name: YT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gh-archive-yt
+                  key: YT_TOKEN
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

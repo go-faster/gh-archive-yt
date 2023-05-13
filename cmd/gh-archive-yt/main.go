@@ -25,7 +25,6 @@ import (
 )
 
 type Service struct {
-	ytAddr  string
 	token   string
 	lg      *zap.Logger
 	batches chan []gh.Event
@@ -48,7 +47,6 @@ type Event struct {
 func (c *Service) Send(ctx context.Context) error {
 	tablePathEvents := ypath.Path("//go-faster").Child("github_events")
 	yc, err := ythttp.NewClient(&yt.Config{
-		Proxy:  c.ytAddr,
 		Logger: &ytzap.Logger{L: zctx.From(ctx)},
 	})
 	if err != nil {
@@ -228,11 +226,9 @@ func main() {
 		}
 
 		s := &Service{
-			batches: make(chan []gh.Event, 5),
-			lg:      lg,
-			ytAddr:  os.Getenv("YT_ADDR"),
-			token:   os.Getenv("GITHUB_TOKEN"),
-
+			batches:      make(chan []gh.Event, 5),
+			lg:           lg,
+			token:        os.Getenv("GITHUB_TOKEN"),
 			missCount:    missCount,
 			fetchedCount: fetchedCount,
 		}
