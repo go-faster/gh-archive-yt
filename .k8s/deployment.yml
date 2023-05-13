@@ -1,0 +1,75 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: faster
+  name: gh-archive-yt
+  labels:
+    app: gh-archive-yt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gh-archive-yt
+  template:
+    metadata:
+      labels:
+        app: gh-archive-yt
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8090'
+    spec:
+      volumes:
+        - name: cache
+          emptyDir: {}
+      containers:
+        - name: gh-archive-yt
+          image: ghcr.io/go-faster/gh-archive-yt:main
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256M
+            limits:
+              cpu: "1"
+              memory: 512M
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+              name: metrics
+            - containerPort: 8080
+              protocol: TCP
+              name: http
+          env:
+            - name: HOME
+              value: /cache
+            - name: HTTP_ADDR
+              value: 0.0.0.0:8080
+            - name: METRICS_ADDR
+              value: 0.0.0.0:8090
+            - name: YT_ADDR
+              value: http-proxies.yt.svc.cluster.local
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gh-archive-yt
+                  key: GITHUB_TOKEN
+          volumeMounts:
+            - mountPath: /cache
+              name: cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: faster
+  name: gh-archive-yt
+  labels:
+    app: gh-archive-yt
+    prometheus: "true"
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8090
+      name: metrics
+  selector:
+    app: gh-archive-yt

@@ -11,3 +11,6 @@ test_fast:
 
 tidy:
 	go mod tidy
+
+build:
+	CGO_ENABLED=0 go build ./cmd/gh-archive-yt
