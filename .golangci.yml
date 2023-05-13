@@ -16,6 +16,10 @@ linters-settings:
     line-length: 140
   goimports:
     local-prefixes: github.com/go-faster/gh-archive-yt
+  revive:
+    rules:
+      - name: exported
+        disabled: true
   gocritic:
     enabled-tags:
       - diagnostic

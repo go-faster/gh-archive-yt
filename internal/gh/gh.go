@@ -24,7 +24,7 @@ type Client struct {
 	tokens []string
 }
 
-func NewClient(http HTTPClient, tok string) *Client {
+func NewClient(client HTTPClient, tok string) *Client {
 	var tokens []string
 	for _, v := range strings.Split(tok, ",") {
 		v = strings.TrimSpace(v)
@@ -33,10 +33,11 @@ func NewClient(http HTTPClient, tok string) *Client {
 		}
 		tokens = append(tokens, v)
 	}
+	rnd := rand.New(rand.NewSource(time.Now().Unix())) // #nosec G404
 	return &Client{
-		http:   http,
+		http:   client,
 		tokens: tokens,
-		rand:   rand.New(rand.NewSource(time.Now().Unix())),
+		rand:   rnd,
 	}
 }
 
@@ -90,7 +91,7 @@ type Event struct {
 }
 
 func (e *Event) Parse() error {
-	if err := jx.DecodeBytes(e.Raw).ObjBytes(func(d *jx.Decoder, k []byte) error {
+	return jx.DecodeBytes(e.Raw).ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
 		case "created_at":
 			v, err := d.Str()
@@ -118,14 +119,11 @@ func (e *Event) Parse() error {
 			}
 			return nil
 		}
-	}); err != nil {
-		return err
-	}
-	return nil
+	})
 }
 
 func (c *Client) Events(ctx context.Context, p Params) (*Result[[]Event], error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/events", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/events", http.NoBody)
 	if err != nil {
 		return nil, err
 	}
