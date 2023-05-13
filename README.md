@@ -4,8 +4,7 @@ Archive GitHub events to [YTsaurus](https://ytsaurus.tech/).
 
 ## ACL
 
-To modify ACL for cypress folder:
-
 ```bash
 cat _hack/acl.yson | yt set //go-faster/@acl
+cat _hack/acl.account.yson | yt set //sys/accounts/gh-archive-yt/@acl
 ```
