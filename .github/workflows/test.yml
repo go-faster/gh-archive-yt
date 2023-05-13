@@ -1,4 +1,4 @@
-name: x
+name: test
 
 on:
   push:
@@ -6,12 +6,65 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Common Go workflows from go faster
-# See https://github.com/go-faster/x
 jobs:
-  test:
-    uses: go-faster/x/.github/workflows/test.yml@main
-  lint:
-    uses: go-faster/x/.github/workflows/lint.yml@main
-  commit:
-    uses: go-faster/x/.github/workflows/commit.yml@main
+  run:
+    timeout-minutes: 30
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        flags: [""]
+        arch:
+          - amd64
+        runner:
+          - ubuntu-latest
+        go:
+          - "1.20.x"
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            flags: "-race"
+            go: "1.20.x"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+
+      - name: Get Go environment
+        id: go-env
+        shell: bash
+        run: |
+          echo "cache=$(go env GOCACHE)" >> $GITHUB_ENV
+          echo "modcache=$(go env GOMODCACHE)" >> $GITHUB_ENV
+
+        # Build cache key prefix, using runner OS and arch.
+      - name: Compute cache prefix
+        id: cache-prefix
+        shell: bash
+        env:
+          RUNNER_PREFIX: ${{ runner.os }}-${{ runner.arch }}-go
+          ARCH_PREFIX: ${{ matrix.arch != 'amd64' && format('-{0}', matrix.arch) || '' }}
+          RACE_PREFIX: ${{ contains(matrix.flags, '-race') && '-race' || '' }}
+        run:
+          echo "cache_prefix=$RUNNER_PREFIX$ARCH_PREFIX$RACE_PREFIX" >> $GITHUB_ENV
+
+      - name: Set up cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ env.cache }}
+            ${{ env.modcache }}
+          key: ${{ env.cache_prefix }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ env.cache_prefix }}-
+
+      - name: Run tests
+        env:
+          GOARCH: ${{ matrix.arch }}
+          GOFLAGS: ${{ matrix.flags }}
+        run: go test --timeout 30m ./...
