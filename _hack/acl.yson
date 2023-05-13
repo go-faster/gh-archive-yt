@@ -1,0 +1,7 @@
+[
+    {
+      "action" = "allow";
+      "subjects" = ["gh-archive-yt"];
+      "permissions" = ["read"; "write"];
+    }
+]
