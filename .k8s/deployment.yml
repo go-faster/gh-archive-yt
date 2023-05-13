@@ -40,6 +40,22 @@ spec:
               protocol: TCP
               name: http
           env:
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_METRICS_EXPORTER
+              value: "prometheus"
+            - name: OTEL_EXPORTER_PROMETHEUS_PORT
+              value: "8090"
+            - name: OTEL_EXPORTER_PROMETHEUS_HOST
+              value: "0.0.0.0"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.name=go-faster.gh-archive-yt"
+            - name: OTEL_LOG_LEVEL
+              value: "DEBUG"
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://tempo-distributor.monitoring.svc.cluster.local:4317"
             - name: HOME
               value: /cache
             - name: HTTP_ADDR
