@@ -2,6 +2,8 @@
 
 Archive GitHub events to [YTsaurus](https://ytsaurus.tech/).
 
+<img src="screen.png" alt="screen">
+
 ## ACL
 
 ```bash
