@@ -9,7 +9,7 @@ require (
 	github.com/mergestat/timediff v0.0.3
 	github.com/stretchr/testify v1.8.2
 	go.opentelemetry.io/otel/metric v0.38.1
-	go.uber.org/atomic v1.10.0
+	go.uber.org/atomic v1.11.0
 	go.uber.org/zap v1.24.0
 	go.ytsaurus.tech/library/go/core/log v0.0.2
 	go.ytsaurus.tech/yt/go v0.0.3
