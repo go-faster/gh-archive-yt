@@ -21,13 +21,13 @@ yt create user --attr '{name=gh-archive-yt}'
 yt issue-token gh-archive-yt
 ```
 
+### Directory
+```bash
+yt create map_node //go-faster --attributes '{owner=gh-archive-yt; account=gh-archive-yt}'
+````
+
 ### ACL
 ```bash
 cat _hack/acl.yson | yt set //go-faster/@acl
 cat _hack/acl.account.yson | yt set //sys/accounts/gh-archive-yt/@acl
 ```
-
-### Directory
-```bash```
-yt create map_node //go-faster --attributes '{owner=gh-archive-yt}'
-````
