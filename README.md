@@ -23,6 +23,8 @@ yt create user --attr '{name=gh-archive-yt}'
 yt issue-token gh-archive-yt
 ```
 
+Also create account `gh-archive-yt` in UI and set appropriate quotas.
+
 ### Directory
 
 ```bash
