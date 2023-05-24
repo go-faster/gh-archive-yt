@@ -7,11 +7,13 @@ Archive GitHub events to [YTsaurus](https://ytsaurus.tech/).
 ## Setup
 
 ### Proxy
+
 ```bash
 kubectl -n yt port-forward services/http-proxies-lb 3080:80
 ```
 
 ### Users
+
 ```bash
 export YT_CONFIG_PATCHES='{proxy={enable_proxy_discovery=%false}}'
 export YT_TOKEN=password
@@ -22,11 +24,13 @@ yt issue-token gh-archive-yt
 ```
 
 ### Directory
+
 ```bash
 yt create map_node //go-faster --attributes '{owner=gh-archive-yt; account=gh-archive-yt}'
-````
+```
 
 ### ACL
+
 ```bash
 cat _hack/acl.yson | yt set //go-faster/@acl
 cat _hack/acl.account.yson | yt set //sys/accounts/gh-archive-yt/@acl
