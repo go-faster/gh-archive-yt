@@ -6,18 +6,12 @@ Archive GitHub events to [YTsaurus](https://ytsaurus.tech/).
 
 ## Setup
 
-### Proxy
-
-```bash
-kubectl -n yt port-forward services/http-proxies-lb 3080:80
-```
-
 ### Users
 
 ```bash
 export YT_CONFIG_PATCHES='{proxy={enable_proxy_discovery=%false}}'
-export YT_TOKEN=password
-export YT_PROXY=localhost:3080
+export YT_TOKEN=token
+export YT_PROXY=http-yt.go-faster.org
 
 yt create user --attr '{name=gh-archive-yt}'
 yt issue-token gh-archive-yt
