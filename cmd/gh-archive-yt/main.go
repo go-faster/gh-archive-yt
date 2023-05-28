@@ -60,7 +60,6 @@ func (c *Service) Migrate(ctx context.Context) error {
 				},
 			},
 			Attributes: map[string]any{
-				"dynamic":           true,
 				"optimize_for":      "scan",
 				"compression_codec": "zstd_5",
 			},
@@ -330,6 +329,8 @@ func EnsureTables(
 			attrs["schema"] = table.Schema
 			if dynamic, ok := attrs["dynamic"].(bool); ok {
 				isDynamic = dynamic
+			} else {
+				attrs["dynamic"] = true
 			}
 
 			if _, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
