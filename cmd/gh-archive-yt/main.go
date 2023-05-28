@@ -332,11 +332,10 @@ func EnsureTables(
 				isDynamic = dynamic
 			}
 
-			_, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
+			if _, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
 				Recursive:  true,
 				Attributes: attrs,
-			})
-			if err != nil {
+			}); err != nil {
 				return err
 			}
 		} else {
@@ -358,12 +357,11 @@ func EnsureTables(
 			}
 
 			if !attrs.Schema.Equal(fixUniqueKeys(table.Schema)) {
-				err = onConflict(path, attrs.Schema, table.Schema)
-				if err == migrate.RetryConflict {
+				switch err = onConflict(path, attrs.Schema, table.Schema); {
+				case errors.As(err, migrate.RetryConflict):
 					goto retry
-				}
 
-				if err != nil {
+				case err != nil:
 					return err
 				}
 			}
