@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -27,11 +28,12 @@ import (
 )
 
 type Service struct {
-	token   string
-	lg      *zap.Logger
-	table   ypath.Path
-	yc      yt.Client
-	batches chan []gh.Event
+	token       string
+	lg          *zap.Logger
+	table       ypath.Path
+	staticTable ypath.Path
+	yc          yt.Client
+	batches     chan []gh.Event
 
 	fetchedCount metric.Int64Counter
 	missCount    metric.Int64Counter
@@ -43,36 +45,34 @@ type Service struct {
 }
 
 type Event struct {
-	ID   int64                `yson:"id"`
-	Time uint64               `yson:"ts"`
-	Data yson2json.RawMessage `yson:"body"`
+	ID   int64  `yson:"id"`
+	Time uint64 `yson:"ts"`
+	Data any    `yson:"body"`
+}
+
+func (Event) Schema() schema.Schema {
+	return schema.Schema{
+		UniqueKeys: true,
+		Columns: []schema.Column{
+			{Name: "ts", ComplexType: schema.TypeTimestamp, SortOrder: schema.SortAscending},
+			{Name: "id", ComplexType: schema.TypeInt64, SortOrder: schema.SortAscending},
+			{Name: "body", ComplexType: schema.Optional{Item: schema.TypeAny}},
+		},
+	}
 }
 
 func (c *Service) Migrate(ctx context.Context) error {
 	tables := map[ypath.Path]migrate.Table{
 		c.table: {
-			Schema: schema.Schema{
-				UniqueKeys: true,
-				Columns: []schema.Column{
-					{Name: "ts", ComplexType: schema.TypeTimestamp, SortOrder: schema.SortAscending},
-					{Name: "id", ComplexType: schema.TypeInt64, SortOrder: schema.SortAscending},
-					{Name: "body", ComplexType: schema.Optional{Item: schema.TypeAny}},
-				},
-			},
+			Schema: Event{}.Schema(),
 			Attributes: map[string]any{
+				"dynamic":           true,
 				"optimize_for":      "scan",
 				"compression_codec": "zstd_5",
 			},
 		},
-		ypath.Path("//go-faster").Child("github_events_static"): {
-			Schema: schema.Schema{
-				UniqueKeys: true,
-				Columns: []schema.Column{
-					{Name: "ts", ComplexType: schema.TypeTimestamp, SortOrder: schema.SortAscending},
-					{Name: "id", ComplexType: schema.TypeInt64, SortOrder: schema.SortAscending},
-					{Name: "body", ComplexType: schema.Optional{Item: schema.TypeAny}},
-				},
-			},
+		c.staticTable: {
+			Schema: Event{}.Schema(),
 			Attributes: map[string]any{
 				"dynamic":           false,
 				"optimize_for":      "scan",
@@ -226,6 +226,86 @@ Fetch:
 	}
 }
 
+func (c *Service) FromDynamicToStatic(ctx context.Context) error {
+	ts, err := c.lastTS(ctx)
+	if err != nil {
+		return err
+	}
+
+	query := fmt.Sprintf("* FROM [%s] WHERE ts > %d ORDER BY ts DESC LIMIT 500", c.table.String(), ts)
+
+	r, err := c.yc.SelectRows(ctx, query, &yt.SelectRowsOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = r.Close()
+	}()
+
+	for r.Next() {
+		var event Event
+
+		if err := r.Scan(&event); err != nil {
+			return errors.Wrap(err, "scan")
+		}
+
+		wr, err := c.yc.WriteTable(ctx, c.staticTable.Rich().SetAppend(), &yt.WriteTableOptions{})
+		if err != nil {
+			return err
+		}
+
+		if err := wr.Write(event); err != nil {
+			_ = wr.Rollback()
+			return err
+		}
+
+		if err := wr.Commit(); err != nil {
+			_ = wr.Rollback()
+			return err
+		}
+	}
+
+	if err := r.Err(); err != nil {
+		return errors.Wrap(err, "iter err")
+	}
+
+	return nil
+}
+
+func (c *Service) lastTS(ctx context.Context) (uint64, error) {
+	var res int64
+
+	if err := c.yc.GetNode(ctx, c.staticTable.Attr("row_count"), &res, &yt.GetNodeOptions{}); err != nil {
+		return 0, errors.Wrap(err, "get node")
+	}
+
+	if res == 0 {
+		return 0, nil
+	}
+
+	res--
+
+	path := c.staticTable.Rich().AddRange(ypath.StartingFrom(ypath.RowIndex(res)))
+
+	r, err := c.yc.ReadTable(ctx, path.YPath(), &yt.ReadTableOptions{})
+	if err != nil {
+		return 0, errors.Wrap(err, "read table")
+	}
+
+	var e Event
+
+	for r.Next() {
+		if err := r.Scan(&e); err != nil {
+			return 0, errors.Wrap(err, "scan")
+		}
+	}
+	defer func() {
+		_ = r.Close()
+	}()
+
+	return e.Time, nil
+}
+
 func main() {
 	app.Run(func(ctx context.Context, lg *zap.Logger, m *app.Metrics) error {
 		g, ctx := errgroup.WithContext(ctx)
@@ -273,8 +353,9 @@ func main() {
 			missCount:    missCount,
 			fetchedCount: fetchedCount,
 
-			table: ypath.Path("//go-faster").Child("github_events"),
-			yc:    yc,
+			table:       ypath.Path("//go-faster").Child("github_events"),
+			staticTable: ypath.Path("//go-faster").Child("github_events_static"),
+			yc:          yc,
 		}
 		if err := s.Migrate(ctx); err != nil {
 			return errors.Wrap(err, "migrate")
@@ -296,6 +377,14 @@ func main() {
 		g.Go(func() error {
 			return s.Send(ctx)
 		})
+		g.Go(func() error {
+			for range time.Tick(50 * time.Second) {
+				if err := s.FromDynamicToStatic(context.Background()); err != nil {
+					lg.Error("from dynamic", zap.NamedError("err", err))
+				}
+			}
+			return nil
+		})
 		return g.Wait()
 	})
 }
@@ -311,8 +400,9 @@ func EnsureTables(
 		var attrs struct {
 			Schema      schema.Schema `yson:"schema"`
 			TabletState string        `yson:"expected_tablet_state"`
+			Dynamic     bool          `yson:"dynamic"`
 		}
-		isDynamic := false
+		isDynamic := true
 
 	retry:
 		ok, err := yc.NodeExists(ctx, path, nil)
@@ -327,10 +417,11 @@ func EnsureTables(
 			}
 
 			attrs["schema"] = table.Schema
-			if dynamic, ok := attrs["dynamic"].(bool); ok {
-				isDynamic = dynamic
-			} else {
-				attrs["dynamic"] = true
+			if dynamic, ok := attrs["dynamic"]; ok {
+				val, ok := dynamic.(bool)
+				if ok {
+					isDynamic = val
+				}
 			}
 
 			if _, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
@@ -343,6 +434,7 @@ func EnsureTables(
 			opts := &yt.GetNodeOptions{Attributes: []string{
 				"schema",
 				"expected_tablet_state",
+				"dynamic",
 			}}
 
 			if err := yc.GetNode(ctx, path.Attrs(), &attrs, opts); err != nil {
@@ -366,6 +458,7 @@ func EnsureTables(
 					return err
 				}
 			}
+			isDynamic = attrs.Dynamic
 		}
 
 		if isDynamic && attrs.TabletState != yt.TabletMounted {
