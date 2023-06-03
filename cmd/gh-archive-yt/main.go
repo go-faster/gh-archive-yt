@@ -424,6 +424,9 @@ func EnsureTables(
 				}
 			}
 
+			rc := migrate.DeleteDataAfterTTL(5 * time.Minute)
+			rc.FillAttrs(attrs)
+
 			if _, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
 				Recursive:  true,
 				Attributes: attrs,
