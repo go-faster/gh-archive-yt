@@ -306,6 +306,21 @@ func (c *Service) lastTS(ctx context.Context) (uint64, error) {
 	return e.Time, nil
 }
 
+func (c *Service) eventsTTL(ctx context.Context) error {
+	ttl := time.Now().Add(-(time.Minute)).Unix()
+
+	tablePath := fmt.Sprintf("%s[:(ts,%d)]", c.staticTable.String(), ttl)
+	spec := map[string]any{
+		"table_path": tablePath,
+	}
+
+	if _, err := c.yc.StartOperation(ctx, yt.OperationErase, spec, &yt.StartOperationOptions{}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	app.Run(func(ctx context.Context, lg *zap.Logger, m *app.Metrics) error {
 		g, ctx := errgroup.WithContext(ctx)
@@ -381,6 +396,9 @@ func main() {
 			for range time.Tick(50 * time.Second) {
 				if err := s.FromDynamicToStatic(context.Background()); err != nil {
 					lg.Error("from dynamic", zap.NamedError("err", err))
+				}
+				if err := s.eventsTTL(context.Background()); err != nil {
+					lg.Error("events ttl", zap.NamedError("err", err))
 				}
 			}
 			return nil
