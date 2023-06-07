@@ -67,22 +67,16 @@ func (c *Service) Migrate(ctx context.Context) error {
 		c.table: {
 			Schema: Event{}.Schema(),
 			Attributes: map[string]any{
-				"dynamic":           true,
-				"optimize_for":      "scan",
-				"compression_codec": "zstd_5",
-			},
-		},
-		c.staticTable: {
-			Schema: Event{}.Schema(),
-			Attributes: map[string]any{
-				"dynamic":           false,
 				"optimize_for":      "scan",
 				"compression_codec": "zstd_5",
 			},
 		},
 	}
-	if err := EnsureTables(ctx, c.yc, tables, migrate.OnConflictDrop(ctx, c.yc)); err != nil {
+	if err := migrate.EnsureTables(ctx, c.yc, tables, migrate.OnConflictDrop(ctx, c.yc)); err != nil {
 		return errors.Wrap(err, "ensure tables")
+	}
+	if _, err := yt.CreateTable(ctx, c.yc, c.staticTable, yt.WithSchema(Event{}.Schema())); err != nil {
+		return errors.Wrap(err, "create static table")
 	}
 	return nil
 }
@@ -406,89 +400,4 @@ func main() {
 		})
 		return g.Wait()
 	})
-}
-
-// EnsureTables is migrate.EnsureTables but without hardcoded dynamic attribute.
-func EnsureTables(
-	ctx context.Context,
-	yc yt.Client,
-	tables map[ypath.Path]migrate.Table,
-	onConflict migrate.ConflictFn,
-) error {
-	for path, table := range tables {
-		var attrs struct {
-			Schema      schema.Schema `yson:"schema"`
-			TabletState string        `yson:"expected_tablet_state"`
-			Dynamic     bool          `yson:"dynamic"`
-		}
-		isDynamic := true
-
-	retry:
-		ok, err := yc.NodeExists(ctx, path, nil)
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			attrs := make(map[string]interface{})
-			for k, v := range table.Attributes {
-				attrs[k] = v
-			}
-
-			attrs["schema"] = table.Schema
-			if dynamic, ok := attrs["dynamic"]; ok {
-				val, ok := dynamic.(bool)
-				if ok {
-					isDynamic = val
-				}
-			}
-
-			rc := migrate.DeleteDataAfterTTL(5 * time.Minute)
-			rc.FillAttrs(attrs)
-
-			if _, err = yc.CreateNode(ctx, path, yt.NodeTable, &yt.CreateNodeOptions{
-				Recursive:  true,
-				Attributes: attrs,
-			}); err != nil {
-				return err
-			}
-		} else {
-			opts := &yt.GetNodeOptions{Attributes: []string{
-				"schema",
-				"expected_tablet_state",
-				"dynamic",
-			}}
-
-			if err := yc.GetNode(ctx, path.Attrs(), &attrs, opts); err != nil {
-				return err
-			}
-
-			fixUniqueKeys := func(s schema.Schema) schema.Schema {
-				if len(s.Columns) > 0 && s.Columns[0].SortOrder != schema.SortNone {
-					s.UniqueKeys = true
-				}
-
-				return s
-			}
-
-			if !attrs.Schema.Equal(fixUniqueKeys(table.Schema)) {
-				switch err = onConflict(path, attrs.Schema, table.Schema); {
-				case errors.As(err, migrate.RetryConflict):
-					goto retry
-
-				case err != nil:
-					return err
-				}
-			}
-			isDynamic = attrs.Dynamic
-		}
-
-		if isDynamic && attrs.TabletState != yt.TabletMounted {
-			if err := migrate.MountAndWait(ctx, yc, path); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }
