@@ -235,7 +235,7 @@ func (c *Service) FromDynamicToStatic(ctx context.Context) error {
 		return err
 	}
 
-	query := fmt.Sprintf("* FROM [%s] WHERE ts > %d ORDER BY ts DESC LIMIT 5000", c.table.String(), ts)
+	query := fmt.Sprintf("* FROM [%s] WHERE ts > %d ORDER BY ts DESC LIMIT 500", c.table.String(), ts)
 
 	r, err := c.yc.SelectRows(ctx, query, &yt.SelectRowsOptions{})
 	if err != nil {
