@@ -76,17 +76,11 @@ func (c *Service) Migrate(ctx context.Context) error {
 		return errors.Wrap(err, "ensure tables")
 	}
 
-	if _, err := yt.CreateTable(ctx, c.yc, c.staticTable, yt.WithSchema(Event{}.Schema()), WithIgnoreExisting()); err != nil {
+	if _, err := yt.CreateTable(ctx, c.yc, c.staticTable, yt.WithSchema(Event{}.Schema()), yt.WithIgnoreExisting()); err != nil {
 		return errors.Wrap(err, "create static table")
 	}
 
 	return nil
-}
-
-func WithIgnoreExisting() yt.CreateTableOption {
-	return func(options *yt.CreateNodeOptions) {
-		options.IgnoreExisting = true
-	}
 }
 
 func (c *Service) Send(ctx context.Context) error {
