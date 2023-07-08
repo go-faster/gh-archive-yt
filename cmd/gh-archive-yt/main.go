@@ -14,7 +14,9 @@ import (
 	"github.com/mergestat/timediff"
 	"github.com/opentracing/opentracing-go"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	otelBridge "go.opentelemetry.io/otel/bridge/opentracing"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -48,7 +50,8 @@ type Service struct {
 	rateLimitReset     atomic.Float64
 	targetRate         atomic.Float64
 
-	tracer trace.Tracer
+	tracer        trace.Tracer
+	httpTransport *otelhttp.Transport
 }
 
 type Event struct {
@@ -95,14 +98,28 @@ func (c *Service) Send(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case batch := <-c.batches:
-			for _, e := range batch {
+			if err := func() (err error) {
+				ctx, span := c.tracer.Start(ctx, "Send",
+					trace.WithAttributes(
+						attribute.Int("batch_size", len(batch)),
+					),
+				)
+				defer func() {
+					if err != nil {
+						span.RecordError(err)
+					}
+					span.End()
+				}()
+
 				bw := c.yc.NewRowBatchWriter()
-				if err := bw.Write(Event{
-					ID:   e.ID,
-					Time: uint64(e.CreatedAt.Unix()),
-					Data: yson2json.RawMessage{JSON: json.RawMessage(e.Raw)},
-				}); err != nil {
-					return errors.Wrap(err, "write row")
+				for _, e := range batch {
+					if err := bw.Write(Event{
+						ID:   e.ID,
+						Time: uint64(e.CreatedAt.Unix()),
+						Data: yson2json.RawMessage{JSON: json.RawMessage(e.Raw)},
+					}); err != nil {
+						return errors.Wrap(err, "write row")
+					}
 				}
 				if err := bw.Commit(); err != nil {
 					return errors.Wrap(err, "commit")
@@ -110,6 +127,10 @@ func (c *Service) Send(ctx context.Context) error {
 				if err := c.yc.InsertRowBatch(ctx, c.table, bw.Batch(), &yt.InsertRowsOptions{}); err != nil {
 					return errors.Wrap(err, "insert rows")
 				}
+
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "send batch")
 			}
 		}
 	}
@@ -121,7 +142,7 @@ func (c *Service) Poll(ctx context.Context) error {
 		maxPages = 10
 	)
 
-	client := gh.NewClient(http.DefaultClient, c.token)
+	client := gh.NewClient(&http.Client{Transport: c.httpTransport}, c.token)
 	latestMet := make(map[int64]struct{})
 	lg := c.lg.Named("poll")
 
@@ -401,6 +422,10 @@ func main() {
 			yc:          yc,
 
 			tracer: wrapperTracerProvider.Tracer(""),
+			httpTransport: otelhttp.NewTransport(http.DefaultTransport,
+				otelhttp.WithTracerProvider(m.TracerProvider()),
+				otelhttp.WithMeterProvider(m.MeterProvider()),
+			),
 		}
 		if _, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 			observer.ObserveInt64(rateLimitRemaining, s.rateLimitRemaining.Load())
