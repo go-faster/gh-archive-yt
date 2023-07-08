@@ -8,8 +8,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-faster/errors"
+	"github.com/go-faster/sdk/app"
+	"github.com/go-faster/sdk/zctx"
 	"github.com/mergestat/timediff"
+	"github.com/opentracing/opentracing-go"
+	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel"
+	otelBridge "go.opentelemetry.io/otel/bridge/opentracing"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	ytzap "go.ytsaurus.tech/library/go/core/log/zap"
@@ -20,10 +28,6 @@ import (
 	"go.ytsaurus.tech/yt/go/yt"
 	"go.ytsaurus.tech/yt/go/yt/ythttp"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/go-faster/errors"
-	"github.com/go-faster/sdk/app"
-	"github.com/go-faster/sdk/zctx"
 
 	"github.com/go-faster/gh-archive-yt/internal/gh"
 )
@@ -43,6 +47,8 @@ type Service struct {
 	rateLimitUsed      atomic.Int64
 	rateLimitReset     atomic.Float64
 	targetRate         atomic.Float64
+
+	tracer trace.Tracer
 }
 
 type Event struct {
@@ -224,6 +230,20 @@ Fetch:
 }
 
 func (c *Service) FromDynamicToStatic(ctx context.Context) error {
+	// TODO(ernado): enable after R&D.
+
+	/*
+		This was disabled.
+
+		Valid approach is do following:
+		1. Make TTL reasonably big.
+		2. Fill static table in background from dynamic table in batches, e.g. full day data.
+		3. Probably we should use partitioning per month, i.e. split static tables into events_2020_01, events_2020_02, etc.
+	*/
+
+	ctx, span := c.tracer.Start(ctx, "FromDynamicToStatic")
+	defer span.End()
+
 	ts, err := c.lastTS(ctx)
 	if err != nil {
 		return err
@@ -304,7 +324,10 @@ func (c *Service) lastTS(ctx context.Context) (uint64, error) {
 }
 
 func (c *Service) eventsTTL(ctx context.Context) error {
-	ttl := time.Now().Add(-(time.Minute)).Unix()
+	ctx, span := c.tracer.Start(ctx, "eventsTTL")
+	defer span.End()
+
+	ttl := time.Now().AddDate(0, 0, -1).Unix()
 
 	tablePath := fmt.Sprintf("%s[:(ts,%d)]", c.staticTable.String(), ttl)
 	spec := map[string]any{
@@ -320,7 +343,14 @@ func (c *Service) eventsTTL(ctx context.Context) error {
 
 func main() {
 	app.Run(func(ctx context.Context, lg *zap.Logger, m *app.Metrics) error {
-		g, ctx := errgroup.WithContext(ctx)
+		// Setting OpenTelemetry/OpenTracing Bridge.
+		// https://github.com/open-telemetry/opentelemetry-go/tree/main/bridge/opentracing#opentelemetryopentracing-bridge
+		otelTracer := m.TracerProvider().Tracer("yt")
+		bridgeTracer, wrapperTracerProvider := otelBridge.NewTracerPair(otelTracer)
+		opentracing.SetGlobalTracer(bridgeTracer)
+
+		// Override for context propagation.
+		otel.SetTracerProvider(wrapperTracerProvider)
 
 		// Initializing metrics.
 		meter := m.MeterProvider().Meter("")
@@ -353,7 +383,8 @@ func main() {
 		}
 
 		yc, err := ythttp.NewClient(&yt.Config{
-			Logger: &ytzap.Logger{L: zctx.From(ctx)},
+			Logger: &ytzap.Logger{L: zctx.From(ctx).Named("yt")},
+			Tracer: bridgeTracer,
 		})
 		if err != nil {
 			return errors.Wrap(err, "yt")
@@ -368,11 +399,9 @@ func main() {
 			table:       ypath.Path("//go-faster").Child("github_events"),
 			staticTable: ypath.Path("//go-faster").Child("github_events_static"),
 			yc:          yc,
-		}
-		if err := s.Migrate(ctx); err != nil {
-			return errors.Wrap(err, "migrate")
-		}
 
+			tracer: wrapperTracerProvider.Tracer(""),
+		}
 		if _, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 			observer.ObserveInt64(rateLimitRemaining, s.rateLimitRemaining.Load())
 			observer.ObserveInt64(rateLimitUsed, s.rateLimitUsed.Load())
@@ -383,23 +412,32 @@ func main() {
 			return errors.Wrap(err, "failed to register callback")
 		}
 
-		g.Go(func() error {
-			return s.Poll(ctx)
-		})
-		g.Go(func() error {
-			return s.Send(ctx)
-		})
-		g.Go(func() error {
-			for range time.Tick(50 * time.Second) {
-				if err := s.FromDynamicToStatic(context.Background()); err != nil {
-					lg.Error("from dynamic", zap.NamedError("err", err))
+		rootCmd := &cobra.Command{
+			Use: "gh-archive-yt",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if err := s.Migrate(ctx); err != nil {
+					return errors.Wrap(err, "migrate")
 				}
-				if err := s.eventsTTL(context.Background()); err != nil {
-					lg.Error("events ttl", zap.NamedError("err", err))
+				g, ctx := errgroup.WithContext(ctx)
+				g.Go(func() error {
+					return s.Poll(ctx)
+				})
+				g.Go(func() error {
+					return s.Send(ctx)
+				})
+				return g.Wait()
+			},
+		}
+		ttlCmd := &cobra.Command{
+			Use: "ttl",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if err := s.eventsTTL(ctx); err != nil {
+					return errors.Wrap(err, "events ttl")
 				}
-			}
-			return nil
-		})
-		return g.Wait()
+				return nil
+			},
+		}
+		rootCmd.AddCommand(ttlCmd)
+		return rootCmd.ExecuteContext(ctx)
 	})
 }
