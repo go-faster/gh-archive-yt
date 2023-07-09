@@ -438,6 +438,9 @@ func main() {
 		}
 
 		rootCmd := &cobra.Command{
+			SilenceUsage:  true,
+			SilenceErrors: true,
+
 			Use: "gh-archive-yt",
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if err := s.Migrate(ctx); err != nil {
