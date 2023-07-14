@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -35,12 +34,11 @@ import (
 )
 
 type Service struct {
-	token       string
-	lg          *zap.Logger
-	table       ypath.Path
-	staticTable ypath.Path
-	yc          yt.Client
-	batches     chan []gh.Event
+	token   string
+	lg      *zap.Logger
+	table   ypath.Path
+	yc      yt.Client
+	batches chan []gh.Event
 
 	fetchedCount metric.Int64Counter
 	missCount    metric.Int64Counter
@@ -81,12 +79,12 @@ func (c *Service) Migrate(ctx context.Context) error {
 			},
 		},
 	}
+
+	rt := migrate.DeleteDataAfterTTL(24 * time.Hour)
+	rt.FillAttrs(tables[c.table].Attributes)
+
 	if err := migrate.EnsureTables(ctx, c.yc, tables, migrate.OnConflictDrop(ctx, c.yc)); err != nil {
 		return errors.Wrap(err, "ensure tables")
-	}
-
-	if _, err := yt.CreateTable(ctx, c.yc, c.staticTable, yt.WithSchema(Event{}.Schema()), yt.WithIgnoreExisting()); err != nil {
-		return errors.Wrap(err, "create static table")
 	}
 
 	return nil
@@ -250,118 +248,6 @@ Fetch:
 	}
 }
 
-func (c *Service) FromDynamicToStatic(ctx context.Context) error {
-	// TODO(ernado): enable after R&D.
-
-	/*
-		This was disabled.
-
-		Valid approach is do following:
-		1. Make TTL reasonably big.
-		2. Fill static table in background from dynamic table in batches, e.g. full day data.
-		3. Probably we should use partitioning per month, i.e. split static tables into events_2020_01, events_2020_02, etc.
-	*/
-
-	ctx, span := c.tracer.Start(ctx, "FromDynamicToStatic")
-	defer span.End()
-
-	ts, err := c.lastTS(ctx)
-	if err != nil {
-		return err
-	}
-
-	query := fmt.Sprintf("* FROM [%s] WHERE ts > %d ORDER BY ts DESC LIMIT 500", c.table.String(), ts)
-
-	r, err := c.yc.SelectRows(ctx, query, &yt.SelectRowsOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = r.Close()
-	}()
-
-	for r.Next() {
-		var event Event
-
-		if err := r.Scan(&event); err != nil {
-			return errors.Wrap(err, "scan")
-		}
-
-		wr, err := c.yc.WriteTable(ctx, c.staticTable.Rich().SetAppend(), &yt.WriteTableOptions{})
-		if err != nil {
-			return err
-		}
-
-		if err := wr.Write(event); err != nil {
-			_ = wr.Rollback()
-			return err
-		}
-
-		if err := wr.Commit(); err != nil {
-			_ = wr.Rollback()
-			return err
-		}
-	}
-
-	if err := r.Err(); err != nil {
-		return errors.Wrap(err, "iter err")
-	}
-
-	return nil
-}
-
-func (c *Service) lastTS(ctx context.Context) (uint64, error) {
-	var res int64
-
-	if err := c.yc.GetNode(ctx, c.staticTable.Attr("row_count"), &res, &yt.GetNodeOptions{}); err != nil {
-		return 0, errors.Wrap(err, "get node")
-	}
-
-	if res == 0 {
-		return 0, nil
-	}
-
-	res--
-
-	path := c.staticTable.Rich().AddRange(ypath.StartingFrom(ypath.RowIndex(res)))
-
-	r, err := c.yc.ReadTable(ctx, path.YPath(), &yt.ReadTableOptions{})
-	if err != nil {
-		return 0, errors.Wrap(err, "read table")
-	}
-
-	var e Event
-
-	for r.Next() {
-		if err := r.Scan(&e); err != nil {
-			return 0, errors.Wrap(err, "scan")
-		}
-	}
-	defer func() {
-		_ = r.Close()
-	}()
-
-	return e.Time, nil
-}
-
-func (c *Service) eventsTTL(ctx context.Context) error {
-	ctx, span := c.tracer.Start(ctx, "eventsTTL")
-	defer span.End()
-
-	ttl := time.Now().AddDate(0, 0, -1).Unix()
-
-	tablePath := fmt.Sprintf("%s[:(ts,%d)]", c.staticTable.String(), ttl)
-	spec := map[string]any{
-		"table_path": tablePath,
-	}
-
-	if _, err := c.yc.StartOperation(ctx, yt.OperationErase, spec, &yt.StartOperationOptions{}); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func main() {
 	app.Run(func(ctx context.Context, lg *zap.Logger, m *app.Metrics) error {
 		// Setting OpenTelemetry/OpenTracing Bridge.
@@ -417,9 +303,8 @@ func main() {
 			missCount:    missCount,
 			fetchedCount: fetchedCount,
 
-			table:       ypath.Path("//go-faster").Child("github_events"),
-			staticTable: ypath.Path("//go-faster").Child("github_events_static"),
-			yc:          yc,
+			table: ypath.Path("//go-faster").Child("github_events"),
+			yc:    yc,
 
 			tracer: wrapperTracerProvider.Tracer(""),
 			httpTransport: otelhttp.NewTransport(http.DefaultTransport,
@@ -456,16 +341,6 @@ func main() {
 				return g.Wait()
 			},
 		}
-		ttlCmd := &cobra.Command{
-			Use: "ttl",
-			RunE: func(cmd *cobra.Command, args []string) error {
-				if err := s.eventsTTL(ctx); err != nil {
-					return errors.Wrap(err, "events ttl")
-				}
-				return nil
-			},
-		}
-		rootCmd.AddCommand(ttlCmd)
 		return rootCmd.ExecuteContext(ctx)
 	})
 }
