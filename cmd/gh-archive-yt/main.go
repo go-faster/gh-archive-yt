@@ -80,7 +80,7 @@ func (c *Service) Migrate(ctx context.Context) error {
 		},
 	}
 
-	rt := migrate.DeleteDataAfterTTL(24 * time.Hour)
+	rt := migrate.DeleteDataAfterTTL(24 * time.Hour * 14) // 2 weeks
 	rt.FillAttrs(tables[c.table].Attributes)
 
 	if err := migrate.EnsureTables(ctx, c.yc, tables, migrate.OnConflictDrop(ctx, c.yc)); err != nil {
