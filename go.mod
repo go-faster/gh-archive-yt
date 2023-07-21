@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/go-faster/errors v0.6.1
-	github.com/go-faster/jx v1.0.0
+	github.com/go-faster/jx v1.0.1
 	github.com/go-faster/sdk v0.7.0
 	github.com/mergestat/timediff v0.0.3
 	github.com/opentracing/opentracing-go v1.2.0
