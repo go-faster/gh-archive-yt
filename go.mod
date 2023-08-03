@@ -18,7 +18,7 @@ require (
 	go.uber.org/atomic v1.11.0
 	go.uber.org/zap v1.25.0
 	go.ytsaurus.tech/library/go/core/log v0.0.3
-	go.ytsaurus.tech/yt/go v0.0.7
+	go.ytsaurus.tech/yt/go v0.0.8
 	golang.org/x/sync v0.3.0
 )
 
