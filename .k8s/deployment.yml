@@ -63,7 +63,7 @@ spec:
             - name: METRICS_ADDR
               value: 0.0.0.0:8090
             - name: YT_PROXY
-              value: http-proxies-default.yt.svc.cluster.local
+              value: http-proxies.yt.svc.cluster.local
             - name: YT_TOKEN
               valueFrom:
                 secretKeyRef:
