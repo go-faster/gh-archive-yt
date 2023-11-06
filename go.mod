@@ -3,7 +3,7 @@ module github.com/go-faster/gh-archive-yt
 go 1.20
 
 require (
-	github.com/go-faster/errors v0.6.1
+	github.com/go-faster/errors v0.7.0
 	github.com/go-faster/jx v1.1.0
 	github.com/go-faster/sdk v0.9.2
 	github.com/mergestat/timediff v0.0.3
